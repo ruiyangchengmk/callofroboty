@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from humanoid_fleet.domain import DrinkOrder, Intent, ItemOrder, UserInput
 
@@ -112,6 +115,119 @@ class MockMultimodalLLMClient:
             }
 
         raise ValueError(f"Mock model could not confidently parse task: {text}")
+
+
+class OllamaModelClient:
+    """Model client backed by local Ollama generate and chat endpoints."""
+
+    def __init__(
+        self,
+        model: str = "qwen3.5:0.8b",
+        host: str = "http://127.0.0.1:11434",
+        timeout_seconds: float = 20.0,
+        disable_thinking: bool = True,
+    ) -> None:
+        self.model = model
+        self.host = host.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+        self.disable_thinking = disable_thinking
+
+    def infer_intent(self, user_input: UserInput, prompt: str) -> dict:
+        del user_input
+        model_prompt = f"/no_think\n{prompt}" if self.disable_thinking else prompt
+        request_payload = {
+            "model": self.model,
+            "prompt": model_prompt,
+            "stream": False,
+            "format": "json",
+            "think": not self.disable_thinking,
+            "options": {
+                "temperature": 0,
+            },
+        }
+        request = Request(
+            f"{self.host}/api/generate",
+            data=json.dumps(request_payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                response_payload = json.loads(response.read().decode("utf-8"))
+        except URLError as exc:
+            raise RuntimeError(f"Could not reach Ollama at {self.host}") from exc
+
+        model_text = response_payload.get("response", "")
+        if not isinstance(model_text, str) or not model_text.strip():
+            raise ValueError("Ollama returned an empty intent response")
+
+        return self._loads_json_object(model_text)
+
+    def chat(self, messages: list[dict[str, str]], system_prompt: str) -> str:
+        chat_messages = [{"role": "system", "content": system_prompt}, *messages]
+        request_payload = {
+            "model": self.model,
+            "messages": chat_messages,
+            "stream": False,
+            "think": not self.disable_thinking,
+            "options": {
+                "temperature": 0.7,
+            },
+        }
+        request = Request(
+            f"{self.host}/api/chat",
+            data=json.dumps(request_payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                response_payload = json.loads(response.read().decode("utf-8"))
+        except URLError as exc:
+            raise RuntimeError(f"Could not reach Ollama at {self.host}") from exc
+
+        message = response_payload.get("message", {})
+        content = message.get("content", "") if isinstance(message, dict) else ""
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Ollama returned an empty chat response")
+        return self._strip_thinking(content)
+
+    @staticmethod
+    def _loads_json_object(text: str) -> dict:
+        cleaned = OllamaModelClient._strip_thinking(text)
+        try:
+            payload = json.loads(cleaned)
+        except json.JSONDecodeError:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start < 0 or end < start:
+                raise ValueError(f"Ollama response did not contain JSON: {text}") from None
+            payload = json.loads(cleaned[start : end + 1])
+
+        if not isinstance(payload, dict):
+            raise ValueError(f"Ollama response must be a JSON object: {text}")
+        return payload
+
+    @staticmethod
+    def _strip_thinking(text: str) -> str:
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def build_model_client_from_env() -> ModelClient:
+    backend = os.getenv("HUMANOID_FLEET_LLM_BACKEND", "mock").strip().lower()
+    if backend == "ollama":
+        return OllamaModelClient(
+            model=os.getenv("OLLAMA_MODEL", "qwen3.5:0.8b"),
+            host=os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
+            timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "20")),
+            disable_thinking=os.getenv("OLLAMA_DISABLE_THINKING", "true").strip().lower()
+            not in {"0", "false", "no"},
+        )
+    if backend == "mock":
+        return MockMultimodalLLMClient()
+    raise ValueError(f"Unsupported HUMANOID_FLEET_LLM_BACKEND: {backend}")
 
 
 class StructuredIntentNormalizer:

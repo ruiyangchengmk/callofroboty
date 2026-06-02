@@ -1,529 +1,542 @@
 # 人形机器人集群控制系统架构文档
 
-## 1. 文档目的
-
-本文档基于门店服务场景下的人形机器人集群控制需求，提出系统总体架构、分层设计、核心模块、关键数据流、部署方式和演进策略，指导系统设计与实施。
-
-## 2. 架构设计原则
-
-- 分层解耦：认知编排、协同调度、技能执行、实时控制分层隔离。
-- 快慢分离：高频实时控制和低频任务编排分离。
-- 模板优先：高频任务优先走模板快路径。
-- 中心与边缘协同：中心负责全局、边缘负责低时延协调、本体负责安全闭环。
-- 透明可解释：关键决策、关键状态、关键异常均可追踪和可解释。
-- 可演进：从单机器人扩展到多机器人，从单场景扩展到多场景。
-
-## 3. 总体架构概览
-
-系统建议采用六层架构：
-
-1. 交互接入层
-2. 任务语义与记忆层
-3. 分级任务编排层
-4. 多机器人协同调度层
-5. 技能执行与运行时层
-6. 实时控制与安全层
-
-同时配套平台支撑域：
-
-- 数据与状态存储
-- 监控告警与链路追踪
-- 配置策略与权限审计
-- 仿真验证与运营管理
-
-## 4. 分层架构设计
-
-### 4.1 交互接入层
-
-职责：
-
-- 接收用户语音、文本或触屏输入
-- 维护会话上下文
-- 输出对用户可见的理解确认和进度反馈
-
-核心组件：
-
-- ASR 服务
-- TTS 服务
-- 会话管理器
-- 多模态输入网关
-- 用户反馈渲染器
-
-输出对象：
-
-- 原始用户请求
-- 结构化会话上下文
-- 用户确认文本
-
-### 4.2 任务语义与记忆层
-
-职责：
-
-- 将自然语言转换为结构化意图
-- 管理任务模板、技能图谱和执行经验
-- 识别熟任务并触发快路径
-
-核心组件：
-
-- 意图解析器
-- 槽位提取器
-- 任务 DSL 生成器
-- 模板检索引擎
-- 相似任务召回服务
-- 模板版本管理服务
-- 经验沉淀服务
-
-关键能力：
-
-- 意图分类
-- 参数抽取
-- 歧义检测
-- 模板命中
-- 模板参数化实例化
-
-### 4.3 分级任务编排层
-
-职责：
-
-- 将任务目标转化为工作流和技能链
-- 统一管理冷路径与热路径
-- 支持任务重规划、插单和中断
-
-建议分为三级：
-
-- `L1 目标级编排`
-  负责业务目标建模，如“制作并递送饮品”
-- `L2 工作流级编排`
-  负责任务拆解、依赖管理和资源约束
-- `L3 技能级编排`
-  负责调用原子技能并组合成执行计划
-
-核心组件：
-
-- 编排引擎
-- 工作流实例化器
-- 前置条件校验器
-- 资源约束分析器
-- 策略路由器
-- 补偿与恢复控制器
-
-### 4.4 多机器人协同调度层
-
-职责：
-
-- 评估单机执行或多机协作的最优模式
-- 根据能力、位置、负载和资源占用分配任务
-- 在执行中动态重分配任务
-
-核心组件：
-
-- 机器人能力中心
-- 资源管理器
-- 调度决策器
-- 任务分派器
-- 协作协调器
-- 重调度控制器
-
-建议调度逻辑：
-
-1. 规则过滤
-2. 能力匹配
-3. 时延和路径估算
-4. 单机/协作评分
-5. 局部竞拍或打分分配
-6. 超时重试和重分配
-
-### 4.5 技能执行与运行时层
-
-职责：
-
-- 将编排层生成的技能计划转化为标准调用
-- 跟踪技能生命周期
-- 管理失败重试、超时和补偿
-
-核心组件：
-
-- 技能注册中心
-- 技能网关
-- 技能状态机
-- 执行代理
-- 失败恢复器
-- 结果回执通道
-
-技能设计原则：
-
-- 每个技能都必须有明确的输入输出
-- 每个技能都必须有前置条件与完成条件
-- 每个技能都必须可取消、可超时、可失败
-- 技能层不得直接承载底层实时控制逻辑
-
-### 4.6 实时控制与安全层
-
-职责：
-
-- 承担机器人本体的低时延控制与安全保障
-- 保证导航、抓取、避障和急停等能力的本地闭环
-
-核心组件：
-
-- 导航控制器
-- 抓取控制器
-- 运动规划器
-- 避障模块
-- 安全监控器
-- 本地行为执行器
-
-设计原则：
-
-- 低层控制本地自治
-- 安全策略高优先级
-- 与上层通过目标和状态接口解耦
-
-## 5. 核心架构机制
-
-### 5.1 双路径任务处理机制
-
-#### 热路径
-
-适用于高频熟任务。
-
-流程：
-
-1. 意图识别
-2. 模板命中
-3. 参数填充
-4. 快速调度
-5. 技能执行
-
-特点：
-
-- 响应更快
-- 可控性更高
-- 适合门店标准服务场景
-
-#### 冷路径
-
-适用于未沉淀模板的新任务或复杂任务。
-
-流程：
-
-1. 语义理解
-2. 任务拆解
-3. 工作流生成
-4. 条件校验
-5. 调度执行
-6. 经验沉淀
-
-特点：
-
-- 泛化能力更强
-- 复杂度更高
-- 用于模板冷启动和长尾任务处理
-
-### 5.2 模板与经验沉淀机制
-
-模板分三层：
-
-- 意图模板
-- 工作流模板
-- 技能图模板
-
-经验沉淀内容：
-
+> **架构风格**：微服务 + 事件驱动 + 分层编排（事件驱动的领域微服务架构）
+> **目标读者**：架构师、后端研发、平台 SRE、产品经理
+
+---
+
+## 0. 文档目的
+
+本文档定义门店人形机器人集群控制系统的微服务架构，涵盖服务拆分、领域边界、通信协议、数据契约、部署拓扑、容错机制和演进路线。读者阅读后应能：
+
+- 清楚系统由哪些微服务组成、各自职责
+- 理解服务间通过什么方式协作（同步 gRPC / 异步事件）
+- 知道门店边缘节点与中心云端的部署形态
+- 知道当前原型已实现哪些服务、哪些仍在规划中
+
+---
+
+## 1. 架构总览
+
+### 1.1 一句话架构描述
+
+**以"任务理解 → 任务记忆 → 分级编排 → 协同调度 → 技能运行时 → 实时控制"为执行链路，以事件总线和 gRPC 为服务骨架，部署形态为"中心云控 + 门店边缘 + 机器人本体"三层。**
+
+### 1.2 架构风格
+
+- **微服务架构**：每个核心能力独立成服务，进程级隔离
+- **事件驱动**：跨服务状态变更通过事件总线解耦
+- **CQRS 友好**：执行链路（写）与查询/回放链路（读）可分离
+- **边云协同**：高频/低时延逻辑放边缘，全局/重逻辑放中心
+
+### 1.3 微服务全景图
+
+系统由 **10 个微服务 + 2 个 BFF（API 聚合层）** 组成：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     接入层（BFF）                              │
+│  interaction-bff (8000)        │  ops-bff (8090)            │
+└────────┬───────────────────────┴──────────┬─────────────────┘
+         │                                  │
+┌────────┴──────────────────────────────────┴────────────────┐
+│                     核心领域微服务（中心 + 边缘）               │
+│                                                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐        │
+│  │ interaction   │  │ intent       │  │ task-memory  │        │
+│  │ service       │  │ service      │  │ service      │        │
+│  │ (交互接入)    │  │ (意图理解)    │  │ (模板记忆)    │        │
+│  └──────────────┘  └──────────────┘  └──────────────┘        │
+│                                                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐        │
+│  │ orchestrator  │  │ scheduler    │  │ skill-runtime│        │
+│  │ service       │  │ service      │  │ service      │        │
+│  │ (任务编排)    │  │ (协同调度)    │  │ (技能执行)    │        │
+│  └──────────────┘  └──────────────┘  └──────────────┘        │
+│                                                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐        │
+│  │ resource     │  │ observability│  │ robot-gateway│        │
+│  │ service      │  │ service      │  │              │        │
+│  │ (资源管理)    │  │ (可观测性)    │  │ (机器人接入)  │        │
+│  └──────────────┘  └──────────────┘  └──────────────┘        │
+│                                                               │
+│  ┌──────────────┐                                              │
+│  │ speech       │  (ASR/TTS 独立服务，CPU 友好)               │
+│  │ service      │                                              │
+│  └──────────────┘                                              │
+└─────────────────────────────────────────────────────────────┘
+                ↕                  ↕                  ↕
+        ┌──────────────┐    ┌──────────────┐   ┌──────────────┐
+        │   Postgres   │    │   Kafka/NATS │   │   Redis      │
+        │   (事务)     │    │   (事件总线) │   │   (热状态)   │
+        └──────────────┘    └──────────────┘   └──────────────┘
+```
+
+---
+
+## 2. 微服务拆分原则
+
+### 2.1 拆分依据
+
+按 **业务能力（Business Capability）** 拆分，而非按技术层：
+
+- 一个微服务 = 一个领域 = 一个独立可部署单元
+- 服务之间通过 **gRPC（同步）** + **事件总线（异步）** 协作
+- 每个服务有自己的数据库 / 存储（**不共享数据库**）
+- 每个服务无状态化，状态外置到 Redis / Postgres
+
+### 2.2 拆分原则
+
+| 原则 | 说明 |
+|------|------|
+| 单一职责 | 一个服务只负责一个领域能力 |
+| 独立部署 | 可独立发布、扩容、灰度 |
+| 数据自治 | 不跨服务直接访问数据库 |
+| 异步优先 | 跨服务状态流转走事件 |
+| 同步最小化 | gRPC 只用于必要的请求-响应 |
+| 失败隔离 | 单服务故障不级联 |
+
+### 2.3 服务粒度判断
+
+- **过粗**（单体）：修改一处需要全量回归
+- **过细**（纳米服务）：分布式事务 / 链路复杂度爆炸
+- **当前粒度**：按领域划 10 个服务，每个服务 1-3 个核心实体，符合团队 3-5 人的服务负责制
+
+---
+
+## 3. 微服务详细定义
+
+### 3.1 interaction-service（交互接入服务）
+
+| 项 | 内容 |
+|----|------|
+| **职责** | 语音 / 文本 / 触屏输入接入；维护会话上下文；渲染用户反馈 |
+| **核心实体** | `Session`, `UserTurn`, `AssistantTurn` |
+| **依赖服务** | speech-service（转写）、intent-service（解析） |
+| **存储** | Redis（会话状态，TTL 30 分钟） |
+| **通信** | 上游 BFF：HTTP；下游 intent-service：gRPC |
+| **关键接口** | `POST /sessions/{id}/turns`, `GET /sessions/{id}/tts` |
+| **当前原型** | `web.py` + `speech_service.py` 合并实现 |
+
+### 3.2 speech-service（语音服务） ✅ 已实现
+
+| 项 | 内容 |
+|----|------|
+| **职责** | 中文 ASR / TTS，独立部署，CPU 友好（aarch64） |
+| **技术栈** | sherpa-onnx + FastAPI |
+| **模型** | Paraformer small int8（ASR）、MeloTTS VITS（TTS） |
+| **端口** | 8010 |
+| **关键接口** | `POST /asr`（multipart audio）、`POST /tts`（form text） |
+| **当前实现** | `src/humanoid_fleet/speech_service.py` |
+
+### 3.3 intent-service（意图理解服务） ✅ 已实现
+
+| 项 | 内容 |
+|----|------|
+| **职责** | 自然语言 → 结构化 Intent；多模态输入解析 |
+| **核心实体** | `Intent`, `DrinkOrder`, `ItemOrder` |
+| **依赖服务** | Ollama 或 Mock 模型（通过 `ModelClient` 接口注入） |
+| **存储** | 无状态 |
+| **通信** | 上游：gRPC；内部推理：HTTP → Ollama |
+| **关键接口** | `POST /interpret`（UserInput → Intent） |
+| **关键能力** | 意图分类、槽位提取、歧义检测、置信度评估 |
+| **当前实现** | `src/humanoid_fleet/understanding.py` |
+
+### 3.4 task-memory-service（任务记忆服务） ✅ 已实现
+
+| 项 | 内容 |
+|----|------|
+| **职责** | 模板存储、匹配、版本管理、相似任务召回、经验沉淀 |
+| **核心实体** | `TaskTemplate`, `TemplateVersion`, `Experience` |
+| **依赖服务** | 无 |
+| **存储** | Postgres（模板元数据）+ 向量库（相似召回，待选型） |
+| **通信** | gRPC |
+| **关键接口** | `find_template(intent)`, `record_experience(...)` |
+| **关键能力** | 模板匹配、参数 schema 校验、版本化、人工审核 |
+| **当前实现** | `src/humanoid_fleet/memory.py`（内存版） |
+
+### 3.5 orchestrator-service（任务编排服务） ✅ 已实现
+
+| 项 | 内容 |
+|----|------|
+| **职责** | 任务目标 → 工作流 → 技能链；SOP / Skill / Agent 三路决策 |
+| **核心实体** | `WorkflowPlan`, `WorkflowTask`, `ResolvedExecution` |
+| **依赖服务** | task-memory, scheduler |
+| **存储** | Postgres（工作流实例）+ Redis（运行状态） |
+| **通信** | 上游 gRPC；下游 scheduler gRPC；事件发 Kafka |
+| **关键接口** | `build_workflow(intent, resolved)`, `plan_task(text)` |
+| **当前实现** | `src/humanoid_fleet/orchestrator.py` + `resolution.py` |
+
+### 3.6 scheduler-service（协同调度服务） ✅ 已实现
+
+| 项 | 内容 |
+|----|------|
+| **职责** | 多机器人能力匹配、资源分配、单/多机决策、任务迁移 |
+| **核心实体** | `RobotCapability`, `Assignment` |
+| **依赖服务** | resource-service, robot-gateway |
+| **存储** | Redis（机器人热状态）+ Postgres（历史分配） |
+| **通信** | gRPC + 事件订阅 `RobotStateChanged` |
+| **关键接口** | `assign(workflow, robots)`, `reassign(task_id)` |
+| **当前实现** | `src/humanoid_fleet/scheduler.py` |
+
+### 3.7 skill-runtime-service（技能运行时服务）
+
+| 项 | 内容 |
+|----|------|
+| **职责** | 技能注册中心、调用网关、执行状态机、失败恢复 |
+| **核心实体** | `SkillSpec`, `SkillExecution`, `ExecutionTrace` |
+| **依赖服务** | robot-gateway |
+| **存储** | Postgres（执行历史）+ Redis（运行时状态） |
+| **通信** | gRPC + 事件发 `SkillStarted`/`SkillCompleted`/`SkillFailed` |
+| **关键接口** | `execute(skill_id, params)`, `cancel(task_id)` |
+| **当前实现** | `src/humanoid_fleet/runtime.py`（仅规划卡生成） |
+
+### 3.8 resource-service（资源管理服务）
+
+| 项 | 内容 |
+|----|------|
+| **职责** | 咖啡机、工作台、物料、通道等共享资源协调 |
+| **核心实体** | `Resource`, `ResourceOccupancy` |
+| **存储** | Postgres + Redis |
+| **通信** | gRPC + 事件发 `ResourceAcquired`/`ResourceReleased` |
+| **关键接口** | `acquire(resource_id)`, `release(...)`, `query_availability(...)` |
+
+### 3.9 robot-gateway（机器人接入网关）
+
+| 项 | 内容 |
+|----|------|
+| **职责** | 机器人接入、心跳采集、状态上报、指令下行、协议适配 |
+| **核心实体** | `RobotSession`, `RobotHeartbeat` |
+| **存储** | Redis（在线状态） |
+| **通信** | 机器人侧：DDS / Zenoh（ROS 2）；平台侧：gRPC + 事件 |
+| **关键接口** | `register_robot(...)`, `report_state(...)`, `dispatch_skill(...)` |
+
+### 3.10 observability-service（可观测性服务）
+
+| 项 | 内容 |
+|----|------|
+| **职责** | 日志聚合、链路追踪、指标采集、事件回放 |
+| **技术栈** | OpenTelemetry + Prometheus + Loki/Jaeger + MinIO（事件存储） |
+| **通信** | 拉模式（Prometheus）+ 推模式（OTel SDK） |
+| **关键能力** | 端到端 trace、决策解释、任务回放 |
+
+---
+
+## 4. 服务间通信模式
+
+### 4.1 同步通信：gRPC
+
+**用于**：请求-响应、需要立即返回结果的场景
+
+```
+interaction-service ──gRPC──> intent-service (解析意图)
+orchestrator-service ──gRPC──> task-memory-service (查模板)
+orchestrator-service ──gRPC──> scheduler-service (分配机器人)
+skill-runtime-service ──gRPC──> robot-gateway (下发技能)
+```
+
+**Proto 文件统一管理**：`/proto/*.proto`，所有服务依赖同一套 IDL。
+
+### 4.2 异步通信：事件总线
+
+**用于**：状态变更、跨服务通知、不需要立即响应的场景
+
+| 事件主题 | 发布方 | 订阅方 |
+|----------|--------|--------|
+| `IntentRecognized` | intent-service | orchestrator-service |
+| `WorkflowPlanned` | orchestrator-service | observability-service |
+| `RobotAssigned` | scheduler-service | observability-service |
+| `SkillStarted` | skill-runtime-service | observability-service, interaction-service |
+| `SkillCompleted` | skill-runtime-service | interaction-service（反馈用户） |
+| `SkillFailed` | skill-runtime-service | orchestrator-service（重规划） |
+| `RobotStateChanged` | robot-gateway | scheduler-service, observability-service |
+| `ResourceAcquired`/`Released` | resource-service | scheduler-service |
+
+**事件总线选型**：Kafka（强一致、回放需求）或 NATS（轻量、低时延）
+
+### 4.3 通信原则
+
+- **能异步就异步**：减少服务耦合，避免级联雪崩
+- **同步调用要超时**：gRPC 默认 3s 超时，避免长时间占用
+- **事件要有版本号**：避免消费者因事件结构变化崩溃
+- **关键事件持久化**：用于回放和审计
+
+---
+
+## 5. 数据架构
+
+### 5.1 数据存储分工
+
+| 存储 | 用途 | 写入方 |
+|------|------|--------|
+| **PostgreSQL** | 事务数据（模板、工作流实例、技能执行） | task-memory, orchestrator, skill-runtime, resource |
+| **Redis** | 热状态（会话、机器人在线、任务运行状态） | interaction, scheduler, robot-gateway |
+| **Kafka / NATS** | 事件流 | 全服务 |
+| **ClickHouse / TimescaleDB** | 时序指标 | observability |
+| **向量库**（Qdrant / pgvector） | 相似任务召回 | task-memory |
+| **MinIO / S3** | 日志归档、音频、trace 数据 | observability, speech |
+
+### 5.2 数据自治
+
+- 每个服务 **拥有自己的表**，不直接跨服务查询
+- 跨服务数据需求通过 **API 调用** 或 **事件订阅** 解决
+- 严禁跨服务 join、严禁共享 schema
+
+### 5.3 关键数据契约
+
+服务间通过 Protobuf / JSON Schema 定义数据契约：
+
+```protobuf
+// intent.proto
+message Intent {
+  string intent_id = 1;
+  string session_id = 2;
+  string intent_type = 3;  // prepare_and_deliver_drinks | pickup_and_deliver_items
+  repeated DrinkOrder drinks = 4;
+  repeated ItemOrder items = 5;
+  string destination = 6;
+  map<string, string> constraints = 7;
+  float confidence = 8;
+  bool requires_confirmation = 9;
+}
+```
+
+---
+
+## 6. 部署架构
+
+### 6.1 三层部署
+
+```
+┌────────────────────────────────────────────────────┐
+│                  中心云控                           │
+│  intent-service, task-memory-service,              │
+│  resource-service, observability-service, ops-bff  │
+│  (Kubernetes, 多副本)                               │
+└────────────────────────────────────────────────────┘
+                        ↕ HTTPS / VPN
+┌────────────────────────────────────────────────────┐
+│              门店边缘节点 (每店 1 套)                │
+│  interaction-bff, interaction-service,             │
+│  orchestrator-service, scheduler-service,          │
+│  skill-runtime-service, robot-gateway,             │
+│  speech-service                                    │
+│  (K3s / Docker Compose, 边缘服务器或工控机)         │
+└────────────────────────────────────────────────────┘
+                        ↕ DDS / Zenoh / WiFi
+┌────────────────────────────────────────────────────┐
+│                机器人本体 (每机器人 1 套)            │
+│  - ROS 2 节点 (技能代理、本地控制)                  │
+│  - 本地安全闭环 (避障、急停)                        │
+│  - 状态采集                                         │
+└────────────────────────────────────────────────────┘
+```
+
+### 6.2 服务部署策略
+
+| 服务 | 部署位置 | 副本数 | 说明 |
+|------|----------|--------|------|
+| interaction-bff | 边缘 | 2 | 入口层冗余 |
+| ops-bff | 中心 | 2 | 运营平台入口 |
+| interaction-service | 边缘 | 2 | 会话有状态，用 Redis 共享 |
+| speech-service | 边缘 | 1-2 | 重 CPU 任务，模型占用大 |
+| intent-service | 中心 | 3 | 调用 LLM，需扩容应对并发 |
+| task-memory-service | 中心 | 2 | 模板读多写少 |
+| orchestrator-service | 边缘 | 2 | 低时延要求 |
+| scheduler-service | 边缘 | 2 | 依赖本地机器人状态 |
+| skill-runtime-service | 边缘 | 2 | 调度执行就近 |
+| resource-service | 中心 | 2 | 资源状态全局一致 |
+| robot-gateway | 边缘 | 2 | 协议适配常驻 |
+| observability-service | 中心 | 2 | 聚合 + 索引 |
+
+### 6.3 当前原型部署状态
+
+```
+┌─────────────────────────────────────────────┐
+│  当前（原型阶段）：单进程本地部署            │
+│  - web.py (8000)        WSGI               │
+│  - speech_service.py (8010) FastAPI        │
+│  - 内部模块: app, understanding,            │
+│    memory, orchestrator, scheduler,        │
+│    runtime, domain, bootstrap              │
+└─────────────────────────────────────────────┘
+```
+
+所有业务模块当前合并在 `humanoid_fleet` 包内运行，**未做进程级微服务拆分**，但模块边界已按上述微服务划分保留，为后续拆分做准备。
+
+---
+
+## 7. 关键数据流
+
+### 7.1 用户下单到执行完成
+
+```
+[用户] 
+  → (1) 语音输入
+  → interaction-bff (8000)
+  → (2) gRPC: speech-service.transcribe(audio)
+  → interaction-service (3) 维护会话上下文
+  → (4) gRPC: intent-service.interpret(text)
+  → (5) gRPC: task-memory.find_template(intent)
+  → (6) 命中 SOP → 进入"等待确认"状态
+  → (7) 用户点击确认
+  → orchestrator-service (8) build_workflow
+  → (9) gRPC: scheduler-service.assign
+  → (10) gRPC: skill-runtime-service.execute
+  → (11) 通过 robot-gateway 下发到机器人
+  → (12) 事件: SkillStarted / SkillCompleted
+  → interaction-service (13) 推送用户反馈（TTS）
+  → (14) 事件全部入 observability-service
+```
+
+### 7.2 异常重规划
+
+```
+skill-runtime-service 检测到失败
+  → 发布事件 SkillFailed(reason)
+  → orchestrator-service 订阅并重规划
+  → scheduler-service 重分配
+  → 发布 RobotAssigned / WorkflowReplanned
+  → interaction-service 推送给用户
+  → observability-service 全程记录
+```
+
+---
+
+## 8. 关键设计决策
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| 通信协议 | gRPC + 事件总线 | 高性能、强契约、异步解耦 |
+| 事件总线 | Kafka（主）/ NATS（边缘） | Kafka 用于回放，NATS 用于低时延 |
+| 任务理解 | 模型优先 + 规则兜底 | 模型擅长理解，规则保证确定性 |
+| 执行优先级 | SOP > Skill > Agent | 确定性、稳定性、低时延 |
+| 部署形态 | 中心 + 边缘 + 本体 | 全局一致性与本地自治兼顾 |
+| 状态管理 | 写时通过事件同步，读时直连 | 避免分布式事务 |
+| 失败处理 | 重试 → 重分配 → 重规划 → 人工接管 | 多级降级 |
+| 监控 | OpenTelemetry + Prometheus | 标准化、可移植 |
+
+---
+
+## 9. 高可用与容错
+
+### 9.1 故障隔离
+
+- **进程级隔离**：每个微服务独立进程，单服务崩溃不影响其他服务
+- **资源隔离**：通过 Kubernetes namespace / 资源配额隔离
+- **限流熔断**：gRPC 链路使用 sentinel / istio 限流
+
+### 9.2 数据可靠性
+
+- **Postgres**：主从复制 + WAL 归档
+- **Kafka**：副本数 ≥ 3，关键事件保留 7 天
+- **Redis**：持久化 + 主从，故障自动切换
+
+### 9.3 降级策略
+
+| 故障 | 降级行为 |
+|------|----------|
+| 中心服务不可用 | 边缘层继续处理已注册模板任务 |
+| LLM 不可用 | 切换到规则解释器（`RuleFallbackInterpreter`） |
+| 语音服务不可用 | 降级为纯文本输入 |
+| 机器人失联 | 超时检测 → 任务迁移到其他机器人 |
+| Kafka 不可用 | 关键事件落本地 WAL，恢复后回补 |
+
+### 9.4 一致性策略
+
+- **服务内**：强一致（Postgres 事务）
+- **服务间**：最终一致（事件总线 + 幂等消费）
+- **状态机**：所有工作流状态机用乐观锁防并发
+
+---
+
+## 10. 安全设计
+
+- **认证**：服务间 mTLS（Istio / Linkerd）
+- **授权**：RBAC（控制 / 运营 / 审计三权分立）
+- **审计**：所有任务下发、接管、取消操作全量留痕
+- **数据分级**：用户数据 / 会话数据 / 日志数据分级存储
+- **安全策略**：高风险动作必须经过策略引擎校验
+- **LLM 隔离**：LLM 不直接进控制闭环，仅产出 Intent 后由确定性系统执行
+
+---
+
+## 11. 可观测性
+
+| 维度 | 工具 | 关键指标 |
+|------|------|----------|
+| 指标 | Prometheus | QPS、延迟、错误率、模板命中率 |
+| 日志 | Loki | 结构化 JSON，含 trace_id |
+| 追踪 | Jaeger / OTel | 端到端 trace，含 LLM 调用、gRPC、事件 |
+| 事件 | Kafka + MinIO | 全量事件归档，可回放 |
+| 告警 | Alertmanager | 任务失败率、机器人失联、LLM 超时 |
+
+**关键看板**：
+- 任务成功率（按模板）
+- 平均响应时延（按链路）
+- 机器人健康度
+- LLM 调用成本
 - 模板命中率
-- 各模板成功率
-- 平均耗时
-- 单机与多机协作收益
-- 常见失败点
 
-建议通过人工审核机制控制模板上线，避免错误经验污染快路径。
+---
 
-### 5.3 解释与透明机制
+## 12. 演进路线
 
-系统必须保留并输出三类解释：
+### 12.1 阶段一：原型（当前）✅
 
-- 理解解释：系统认为用户要做什么
-- 调度解释：系统为何选择某台或多台机器人
-- 执行解释：系统当前处于哪个阶段、为什么等待或重试
+- ✅ 单进程实现所有核心模块
+- ✅ Web UI + 语音服务
+- ✅ Mock / Ollama LLM
+- ✅ 2 个模板、2 个演示机器人
+- ✅ 端到端流程打通
 
-展示对象分为两类：
+**当前状态**：模块边界已按微服务原则划分，但**未做进程级拆分**。
 
-- 用户侧：自然语言、低认知负担
-- 运营侧：结构化任务树、资源视图、日志与指标
+### 12.2 阶段二：微服务拆分（3 个月）
 
-## 6. 核心服务划分
+- 将 `humanoid_fleet` 拆为独立 Python 包 / Go 服务
+- 引入 Kafka / NATS
+- 引入 gRPC + Protobuf IDL
+- 引入 Postgres + Redis
+- 引入 K3s 边缘部署
+- 接入 ROS 2 机器人
 
-建议服务拆分如下：
+### 12.3 阶段三：平台化（6 个月）
 
-- `interaction-service`
-  处理语音、文本、会话和用户反馈
-- `intent-service`
-  处理意图识别、槽位提取和结构化任务生成
-- `task-memory-service`
-  处理模板管理、相似任务检索和经验沉淀
-- `orchestrator-service`
-  处理任务编排、工作流实例化和状态管理
-- `scheduler-service`
-  处理能力匹配、资源分配和多机器人调度
-- `skill-runtime-service`
-  处理技能注册、调用、状态跟踪和恢复
-- `robot-gateway`
-  负责机器人接入、状态上报和指令下发
-- `resource-service`
-  负责咖啡机、工作台、物料等共享资源管理
-- `observability-service`
-  负责日志、追踪、回放和指标采集
-- `ops-console`
-  面向运营的监控、解释和接管平台
+- 多门店联邦
+- 模板审批工作流
+- 经验沉淀与策略学习
+- 数字孪生仿真
+- 跨场景复用
 
-## 7. 关键数据模型
+---
 
-### 7.1 Intent
+## 13. 关键架构抓手
 
-表示用户任务的结构化意图。
+1. **微服务 + 事件**：通过微服务拆分领域边界，通过事件总线解耦服务依赖
+2. **模型优先 + 规则兜底**：LLM 解决开放理解，规则保证关键路径确定性
+3. **SOP > Skill > Agent**：执行优先级固化在 `ExecutionResolver`，保证可控性
+4. **边云协同**：边缘承担低时延编排与执行，中心承担全局一致性与 LLM
+5. **透明可解释**：所有关键决策有 explanation，关键状态有 trace，关键事件可回放
 
-核心字段建议：
+---
 
-- `intent_id`
-- `session_id`
-- `intent_type`
-- `slots`
-- `constraints`
-- `confidence`
-- `requires_confirmation`
+## 14. 附录：当前原型模块对应微服务
 
-### 7.2 TaskTemplate
+| 当前文件 | 归属微服务 | 备注 |
+|----------|------------|------|
+| `web.py` | interaction-bff | BFF，渲染 UI + 语音中转 |
+| `speech_service.py` | speech-service | 已独立部署 ✅ |
+| `app.py` (FleetControlApp) | interaction-bff | 串联各模块的 BFF 逻辑 |
+| `understanding.py` | intent-service | 模型解析 + 规则兜底 |
+| `memory.py` | task-memory-service | 模板匹配 |
+| `resolution.py` | orchestrator-service | SOP/Skill/Agent 决策 |
+| `orchestrator.py` | orchestrator-service | 工作流构建 |
+| `scheduler.py` | scheduler-service | 机器人分配 |
+| `runtime.py` | skill-runtime-service | 执行计划生成 |
+| `domain.py` | 公共 | 数据类 |
+| `bootstrap.py` | scheduler-service | 演示用机器人池 |
 
-表示可复用的熟任务模板。
+---
 
-核心字段建议：
-
-- `template_id`
-- `template_type`
-- `match_conditions`
-- `slot_schema`
-- `workflow_ref`
-- `version`
-- `status`
-
-### 7.3 WorkflowInstance
-
-表示一次具体任务执行实例。
-
-核心字段建议：
-
-- `workflow_id`
-- `goal_type`
-- `task_nodes`
-- `dependencies`
-- `assigned_robots`
-- `state`
-- `execution_context`
-
-### 7.4 SkillSpec
-
-表示原子技能定义。
-
-核心字段建议：
-
-- `skill_id`
-- `skill_name`
-- `input_schema`
-- `output_schema`
-- `preconditions`
-- `success_conditions`
-- `timeout_policy`
-- `compensation_policy`
-
-### 7.5 RobotCapability
-
-表示机器人能力画像。
-
-核心字段建议：
-
-- `robot_id`
-- `capability_tags`
-- `health_state`
-- `location`
-- `battery_level`
-- `availability`
-- `current_load`
-
-### 7.6 ResourceState
-
-表示共享资源状态。
-
-核心字段建议：
-
-- `resource_id`
-- `resource_type`
-- `occupancy_state`
-- `owner`
-- `queue_length`
-- `availability_window`
-
-### 7.7 ExecutionTrace
-
-表示任务执行全过程追踪数据。
-
-核心字段建议：
-
-- `trace_id`
-- `workflow_id`
-- `node_id`
-- `robot_id`
-- `event_type`
-- `timestamp`
-- `reason`
-- `payload`
-
-## 8. 关键时序说明
-
-### 8.1 用户下单到执行完成时序
-
-1. 用户向任意机器人发出语音指令。
-2. 交互接入层将语音转为文本并保留上下文。
-3. 任务语义层完成意图识别和槽位提取。
-4. 模板引擎判断是否命中熟任务模板。
-5. 编排层生成工作流实例。
-6. 调度层决定单机或多机执行方案。
-7. 技能运行时向对应机器人下发技能计划。
-8. 机器人本体执行本地控制闭环。
-9. 状态与事件持续回传平台。
-10. 用户和运营侧实时看到进度、异常和结果。
-
-### 8.2 异常重规划时序
-
-1. 某技能失败或资源被占用。
-2. 技能运行时回传失败原因。
-3. 编排层判断是否可重试、可补偿或需重规划。
-4. 调度层尝试更换机器人或调整执行顺序。
-5. 系统更新任务状态并向用户解释变更原因。
-
-## 9. 部署架构建议
-
-建议采用中心云控加门店边缘加机器人本体三层部署。
-
-### 9.1 机器人本体
-
-部署内容：
-
-- 本地实时控制
-- 本地技能代理
-- 本地状态采集
-- 安全控制模块
-
-### 9.2 门店边缘节点
-
-部署内容：
-
-- 低时延调度缓存
-- 机器人接入网关
-- 局部资源协调
-- 局部任务代理
-- 本地状态汇聚
-
-### 9.3 中心平台
-
-部署内容：
-
-- 意图理解服务
-- 模板与经验管理
-- 全局编排服务
-- 全局调度服务
-- 运维和运营平台
-- 数据分析与模型管理
-
-## 10. 通信与集成建议
-
-### 10.1 控制与状态链路
-
-- 机器人内部和机器人接入层建议使用 ROS 2 通信体系。
-- 低时延状态分发可考虑 DDS 或 Zenoh。
-- 平台服务之间建议使用 gRPC 和事件总线组合。
-
-### 10.2 业务事件链路
-
-适合使用消息总线承接：
-
-- 任务创建事件
-- 状态变更事件
-- 资源占用事件
-- 调度决策事件
-- 审计和追踪事件
-
-### 10.3 外部系统集成
-
-可预留以下接口：
-
-- CRM/预约系统
-- 门店地图与定位系统
-- 物联网设备系统
-- 饮品设备控制接口
-- 门店运营后台
-
-## 11. 技术选型建议
-
-### 11.1 推荐组合
-
-- 机器人侧：ROS 2
-- 实时分发：DDS 或 Zenoh
-- 平台服务：Go 或 Python
-- 服务接口：gRPC
-- 事件总线：Kafka 或 NATS
-- 事务数据：PostgreSQL
-- 热点状态：Redis
-- 时序与分析：TimescaleDB 或 ClickHouse
-- 监控追踪：Prometheus、Grafana、OpenTelemetry
-
-### 11.2 选型原则
-
-- 低时延链路优先选择实时中间件
-- 平台编排优先选择可观测、可回放、易维护的服务架构
-- 不把 LLM 直接置于控制闭环
-
-## 12. 高可用与容错设计
-
-- 核心服务无状态化，支持横向扩展
-- 任务状态持久化，避免单点进程丢失上下文
-- 机器人失联后支持超时检测与任务迁移
-- 边缘节点异常时保留机器人本地最小自治能力
-- 中心服务不可用时，边缘层可支撑部分模板任务继续运行
-
-## 13. 安全设计
-
-- 控制权限、运营权限、审计权限分离
-- 所有任务下发、接管、取消操作全量留痕
-- 高风险动作必须经过安全策略校验
-- 用户数据、会话数据、日志数据分级存储和访问控制
-
-## 14. 演进路线建议
-
-### 14.1 第一阶段
-
-- 建立单机器人自然语言到技能链路
-- 支持高频门店任务模板化
-- 支持基础任务透明反馈
-
-### 14.2 第二阶段
-
-- 建立多机器人协同调度
-- 引入资源管理和任务重分配
-- 建立运营接管与解释平台
-
-### 14.3 第三阶段
-
-- 引入经验优化和策略学习
-- 引入仿真验证和数字孪生
-- 实现跨场景复用和更大规模集群控制
-
-## 15. 架构结论
-
-本系统推荐采用“交互理解、任务记忆、分级编排、协同调度、技能运行时、实时控制”六层架构，并通过热路径与冷路径结合、中心与边缘协同、模板与经验沉淀、解释与透明并重的方式，构建一个面向门店人形机器人场景的高可用、可扩展、可解释的集群控制平台。
-
-其中最关键的架构抓手有四个：
-
-- 用模板和经验解决高频任务时延与稳定性问题
-- 用确定性工作流和技能运行时承接大模型理解结果
-- 用协同调度解决单机与多机模式切换问题
-- 用透明解释和运营接管保证用户体验与系统可信度
+*本文档反映**目标微服务架构**与**当前原型实现**的对应关系。阶段二将完成真正的进程级微服务拆分。*

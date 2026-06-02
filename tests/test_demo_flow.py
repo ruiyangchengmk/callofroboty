@@ -3,7 +3,7 @@ import unittest
 from humanoid_fleet.bootstrap import build_demo_robots
 from humanoid_fleet.domain import MediaAttachment, UserInput
 from humanoid_fleet.app import FleetControlApp
-from humanoid_fleet.understanding import HybridTaskInterpreter
+from humanoid_fleet.understanding import HybridTaskInterpreter, OllamaModelClient
 
 
 class DemoFlowTest(unittest.TestCase):
@@ -28,6 +28,112 @@ class DemoFlowTest(unittest.TestCase):
         self.assertEqual(result["resolution"]["mode"], "skill")
         self.assertEqual(result["resolution"]["skill_name"], "deliver_items")
 
+    def test_conversation_waits_for_confirmation_after_sop_match(self) -> None:
+        review = FleetControlApp().review_conversation(
+            [{"role": "user", "content": "去拿杯冰可乐给3号桌顾客"}]
+        )
+        self.assertEqual(review["state"], "awaiting_confirmation")
+        self.assertEqual(review["resolution"]["mode"], "sop")
+        self.assertIn("确认后", review["assistant_message"])
+
+    def test_conversation_does_not_treat_meta_question_as_task_detail(self) -> None:
+        review = FleetControlApp().review_conversation(
+            [
+                {"role": "user", "content": "说话"},
+                {"role": "assistant", "content": "我还没有足够信息命中现有 SOP。"},
+                {"role": "user", "content": "你命中什么了？"},
+            ]
+        )
+        self.assertEqual(review["state"], "chatting")
+        self.assertEqual(review["task_text"], "")
+        self.assertNotIn("我已命中", review["assistant_message"])
+
+    def test_conversation_supports_small_talk_before_task_details(self) -> None:
+        review = FleetControlApp().review_conversation([{"role": "user", "content": "随便聊聊"}])
+        self.assertEqual(review["state"], "chatting")
+        self.assertEqual(review["task_text"], "")
+        self.assertIn("小派", review["assistant_message"])
+
+    def test_conversation_handles_non_task_acknowledgement_naturally(self) -> None:
+        review = FleetControlApp().review_conversation([{"role": "user", "content": "这确实不是个任务"}])
+        self.assertEqual(review["state"], "chatting")
+        self.assertEqual(review["task_text"], "")
+        self.assertNotIn("可执行任务", review["assistant_message"])
+
+    def test_conversation_handles_weather_without_forcing_task_mode(self) -> None:
+        review = FleetControlApp().review_conversation([{"role": "user", "content": "天气怎么样"}])
+        self.assertEqual(review["state"], "chatting")
+        self.assertEqual(review["task_text"], "")
+        self.assertIn("实时数据", review["assistant_message"])
+
+    def test_conversation_asks_natural_followup_for_partial_cola_task(self) -> None:
+        review = FleetControlApp().review_conversation([{"role": "user", "content": "可乐"}])
+        self.assertEqual(review["state"], "chatting")
+        self.assertIn("可乐我记下了", review["assistant_message"])
+        self.assertNotIn("暂时没有命中已审核 SOP", review["assistant_message"])
+
+    def test_conversation_does_not_confirm_partial_pickup_without_destination(self) -> None:
+        review = FleetControlApp().review_conversation([{"role": "user", "content": "去拿杯可乐"}])
+        self.assertEqual(review["state"], "chatting")
+        self.assertIn("再告诉我送到哪一桌", review["assistant_message"])
+        self.assertNotIn("我已命中", review["assistant_message"])
+
+    def test_conversation_can_complete_partial_pickup_with_destination_later(self) -> None:
+        review = FleetControlApp().review_conversation(
+            [
+                {"role": "user", "content": "去拿杯可乐"},
+                {"role": "assistant", "content": "可乐我记下了。再告诉我送到哪一桌或哪位顾客就行。"},
+                {"role": "user", "content": "送到3号桌"},
+            ]
+        )
+        self.assertEqual(review["state"], "awaiting_confirmation")
+        self.assertEqual(review["resolution"]["mode"], "sop")
+
+    def test_conversation_does_not_reconfirm_old_task_after_garbled_non_task_input(self) -> None:
+        review = FleetControlApp().review_conversation(
+            [
+                {"role": "user", "content": "去拿杯可乐"},
+                {"role": "assistant", "content": "可乐我记下了。再告诉我送到哪一桌或哪位顾客就行。"},
+                {"role": "user", "content": "学校执行任然后就成成机器"},
+            ]
+        )
+        self.assertEqual(review["state"], "chatting")
+        self.assertNotIn("我已命中", review["assistant_message"])
+        self.assertNotIn("可乐我记下了", review["assistant_message"])
+        self.assertIn("不更新到任务里", review["assistant_message"])
+
+    def test_conversation_cancel_clears_pending_candidate_task(self) -> None:
+        review = FleetControlApp().review_conversation(
+            [
+                {"role": "user", "content": "去拿杯可乐"},
+                {"role": "assistant", "content": "可乐我记下了。再告诉我送到哪一桌或哪位顾客就行。"},
+                {"role": "user", "content": "取消取消取消任务"},
+            ]
+        )
+        self.assertEqual(review["state"], "chatting")
+        self.assertEqual(review["task_text"], "")
+        self.assertIn("已取消", review["assistant_message"])
+
+    def test_conversation_requires_supported_sop_entities_before_confirmation(self) -> None:
+        class UnsupportedDrinkClient:
+            def infer_intent(self, user_input, prompt):
+                return {
+                    "intent_type": "prepare_and_deliver_drinks",
+                    "drinks": [{"drink_type": "tea", "temperature": "hot", "sugar": "default", "ice": "regular"}],
+                    "items": [],
+                    "destination": "customer",
+                    "constraints": {},
+                    "confidence": 0.9,
+                    "requires_confirmation": False,
+                }
+
+        app = FleetControlApp()
+        app.interpreter = HybridTaskInterpreter(model_client=UnsupportedDrinkClient())
+        review = app.review_conversation([{"role": "user", "content": "给顾客做一杯热茶"}])
+
+        self.assertEqual(review["state"], "chatting")
+        self.assertIn("不在当前 SOP 范围内", review["assistant_message"])
+
     def test_multimodal_input_is_accepted_by_understanding_layer(self) -> None:
         interpreter = HybridTaskInterpreter()
         user_input = UserInput(
@@ -47,6 +153,12 @@ class DemoFlowTest(unittest.TestCase):
         prompt = interpreter.preview_prompt(user_input)
         self.assertIn("Attachments:", prompt)
         self.assertIn("file:///tmp/drink.jpg", prompt)
+
+    def test_ollama_json_object_can_be_extracted_from_model_text(self) -> None:
+        payload = OllamaModelClient._loads_json_object(
+            '<think>reasoning omitted</think>\n{"intent_type": "pickup_and_deliver_items", "drinks": [], "items": []}'
+        )
+        self.assertEqual(payload["intent_type"], "pickup_and_deliver_items")
 
 
 if __name__ == "__main__":
