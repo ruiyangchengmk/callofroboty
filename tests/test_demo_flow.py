@@ -106,7 +106,10 @@ class DemoFlowTest(unittest.TestCase):
 
         self.assertEqual(status_holder["status"], "200 OK")
         self.assertIn("已确认。我已经生成机器人分工和执行计划。", response)
-        self.assertIn("任务时间线与机器人分工", response)
+        self.assertIn("执行计划已生成", response)
+        self.assertIn("原子技能状态图", response)
+        self.assertNotIn("Routing Ladder", response)
+        self.assertNotIn("Understanding Prompt", response)
         self.assertNotIn("已命中 SOP，等待用户确认", response)
 
     def test_confirmation_detection_ignores_questions(self) -> None:

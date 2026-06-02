@@ -284,28 +284,31 @@ def _render_chat_messages(messages: list[dict[str, str]]) -> str:
     return "".join(rows)
 
 
+def _render_task_brief(intent: dict) -> str:
+    pieces = []
+    for drink in intent.get("drinks", []):
+        pieces.append(
+            f"{drink.get('quantity', 1)}杯{drink.get('drink_type', '饮品')} / "
+            f"{drink.get('temperature', 'regular')} / {drink.get('sugar', 'default')} / {drink.get('ice', 'regular')}"
+        )
+    for item in intent.get("items", []):
+        pieces.append(f"{item.get('quantity', 1)}份{item.get('item_type', '物品')} / {item.get('temperature', 'regular')}")
+    return "；".join(pieces) if pieces else intent.get("raw_text", "服务任务")
+
+
 def _render_pending_confirmation(review: dict | None) -> str:
     if not review or review.get("state") != "awaiting_confirmation":
         return ""
 
     intent = review["intent"]
-    template = review["template"]
-    resolution = review["resolution"]
     return f"""
-    <section class="card confirmation-card">
-      <div class="section-head">
-        <div>
-          <span class="eyebrow">SOP Confirmation</span>
-          <h2>已命中 SOP，等待用户确认</h2>
-        </div>
-        <span class="badge">待确认</span>
+    <section class="task-status-strip awaiting">
+      <div>
+        <span class="eyebrow">Task Checkpoint</span>
+        <h2>已识别服务任务，等待确认</h2>
+        <p>{html.escape(_render_task_brief(intent))}，送达 {html.escape(intent.get('destination') or '未指定')}。</p>
       </div>
-      <p><strong>模板：</strong>{html.escape(template['name'])}</p>
-      <p><strong>模板 ID：</strong>{html.escape(template['template_id'])}</p>
-      <p><strong>目的地：</strong>{html.escape(intent['destination'])}</p>
-      <p><strong>置信度：</strong>{intent['confidence']}</p>
-      <ul class="entity-grid">{_render_intent_entities(intent)}</ul>
-      <p class="muted">{html.escape(resolution['explanation'])}</p>
+      <span class="status-chip">待用户确认</span>
     </section>
     """
 
@@ -364,13 +367,13 @@ def _render_workflow_state_panel(review: dict | None, result: dict | None) -> st
     workflow = None
     mode = "preview"
     title_status = "SOP 已命中，等待确认"
-    summary = "系统已把 SOP 展开成可执行的原子技能状态图。确认后，机器人会按这个图执行并回写状态。"
+    summary = "确认后机器人会按节点顺序执行；后续真实状态会同步到这里。"
 
     if result and result.get("workflow"):
         workflow = result["workflow"]
         mode = "confirmed"
         title_status = "已确认，等待机器人执行"
-        summary = "执行计划已生成。后续接入机器人后，节点状态会从这里同步更新。"
+        summary = "执行计划已生成，等待机器人回传节点状态。"
     elif review and review.get("state") == "awaiting_confirmation":
         workflow = review.get("workflow")
 
@@ -417,126 +420,17 @@ def render_page(
         """
     elif result:
         intent = result["intent"]
-        template = result["template"]
-        resolution = result["resolution"]
-        workflow = result["workflow"]
         execution_plan = result["execution_plan"]
-        prompt = result["understanding_prompt"]
-        robots = result["robots"]
-        catalog = result["template_catalog"]
 
         content = f"""
-        <section class="summary-grid">
-          <article class="hero-card highlight">
-            <span class="eyebrow">Execution Path</span>
-            <h2>{_label_resolution(resolution['mode'])}</h2>
-            <p>{html.escape(resolution['explanation'])}</p>
-            <div class="pill-row">
-              <span class="pill">执行模式 {html.escape(workflow['mode'])}</span>
-              <span class="pill">目标 {html.escape(intent['intent_type'])}</span>
-              <span class="pill">确认 {'需要' if intent['requires_confirmation'] else '无需'}</span>
-            </div>
-          </article>
-          <article class="hero-card">
-            <span class="eyebrow">User Transparency</span>
-            <h2>用户可见反馈</h2>
+        <section class="task-status-strip confirmed">
+          <div>
+            <span class="eyebrow">Execution Ready</span>
+            <h2>执行计划已生成</h2>
             <p>{html.escape(execution_plan['user_summary'])}</p>
-            <p class="muted">{html.escape(execution_plan['operator_summary'])}</p>
-          </article>
-        </section>
-
-        <section class="card">
-          <div class="section-head">
-            <div>
-              <span class="eyebrow">Routing Ladder</span>
-              <h2>SOP → Skill → Agent</h2>
-            </div>
-            <p class="muted">这条链路表达的是执行资产优先级，而不是任务理解方式。</p>
+            <p class="muted">右侧状态图会显示机器人执行进度；SOP 和原子能力详情在左侧栏查看。</p>
           </div>
-          <div class="route-grid">
-            {_render_route_steps(resolution['mode'])}
-          </div>
-        </section>
-
-        <section class="grid two">
-          <article class="card">
-            <span class="eyebrow">Structured Intent</span>
-            <h2>任务理解结果</h2>
-            <p><strong>目的地：</strong>{html.escape(intent['destination'])}</p>
-            <p><strong>置信度：</strong>{intent['confidence']}</p>
-            <ul class="entity-grid">{_render_intent_entities(intent)}</ul>
-          </article>
-          <article class="card">
-            <span class="eyebrow">Task Asset</span>
-            <h2>命中的工作流资产</h2>
-            <p><strong>模板：</strong>{html.escape(template['name']) if template else '无'}</p>
-            <p><strong>模板 ID：</strong>{html.escape(template['template_id']) if template else '无'}</p>
-            <p><strong>支持多机器人：</strong>{'是' if template and template['supports_multi_robot'] else '否'}</p>
-            <p><strong>直达技能：</strong>{html.escape(resolution['skill_name']) if resolution['skill_name'] else '无'}</p>
-          </article>
-        </section>
-
-        <section class="card">
-          <div class="section-head">
-            <div>
-              <span class="eyebrow">Workflow</span>
-              <h2>任务时间线与机器人分工</h2>
-            </div>
-            <p class="muted">先命中 SOP，再实例化成当前任务的工作流与技能链。</p>
-          </div>
-          <ol class="timeline">
-            {_render_task_timeline(workflow)}
-          </ol>
-        </section>
-
-        <section class="grid two">
-          <article class="card">
-            <span class="eyebrow">Execution Plan</span>
-            <h2>技能执行卡片</h2>
-            <div class="mini-grid">
-              {_render_execution_cards(execution_plan)}
-            </div>
-          </article>
-          <article class="card">
-            <span class="eyebrow">Explainability</span>
-            <h2>编排解释</h2>
-            <ul class="plain-list">
-              {''.join(f"<li>{html.escape(line)}</li>" for line in workflow['explanation'])}
-            </ul>
-          </article>
-        </section>
-
-        <section class="grid two">
-          <article class="card">
-            <div class="section-head">
-              <div>
-                <span class="eyebrow">SOP Catalog</span>
-                <h2>已登记工作流资产</h2>
-              </div>
-              <p class="muted">当前命中的模板会高亮。</p>
-            </div>
-            <div class="mini-grid">
-              {_render_template_catalog(catalog, template)}
-            </div>
-          </article>
-          <article class="card">
-            <div class="section-head">
-              <div>
-                <span class="eyebrow">Fleet</span>
-                <h2>演示机器人资源</h2>
-              </div>
-              <p class="muted">后续可替换成真实运行时状态。</p>
-            </div>
-            <div class="mini-grid">
-              {_render_robot_cards(robots)}
-            </div>
-          </article>
-        </section>
-
-        <section class="card">
-          <span class="eyebrow">Understanding Prompt</span>
-          <h2>模型理解提示词预览</h2>
-          <pre>{html.escape(prompt)}</pre>
+          <span class="status-chip">等待机器人</span>
         </section>
         """
 
@@ -964,9 +858,46 @@ def render_page(
           border-color: #d5aaa0;
           color: #882d21;
         }}
-        .confirmation-card {{
+        .task-status-strip {{
+          display: flex;
+          justify-content: space-between;
+          gap: 16px;
+          align-items: center;
+          margin-top: 18px;
+          padding: 16px 18px;
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          background: rgba(255, 249, 240, 0.92);
+        }}
+        .task-status-strip h2 {{
+          font-size: 20px;
+          margin-top: 4px;
+        }}
+        .task-status-strip p {{
+          color: var(--muted);
+          margin-top: 5px;
+        }}
+        .task-status-strip.awaiting {{
           border-color: #c9905f;
-          background: rgba(255, 249, 240, 0.96);
+          background: rgba(255, 247, 235, 0.94);
+        }}
+        .task-status-strip.confirmed {{
+          border-color: rgba(36, 95, 69, 0.32);
+          background: rgba(242, 250, 245, 0.88);
+        }}
+        .status-chip {{
+          flex: 0 0 auto;
+          border-radius: 999px;
+          background: var(--surface-strong);
+          color: var(--accent);
+          padding: 6px 10px;
+          font-size: 12.5px;
+          font-weight: 700;
+          white-space: nowrap;
+        }}
+        .task-status-strip.confirmed .status-chip {{
+          background: rgba(36, 95, 69, 0.12);
+          color: var(--ok);
         }}
         .workflow-state-panel {{
           position: fixed;
@@ -1858,7 +1789,17 @@ def render_page(
           const nextMain = doc.querySelector("main");
           const currentMain = document.querySelector("main");
           if (nextMain && currentMain) {{
+            const keepSidebarOpen = document.body.classList.contains("sidebar-open");
             currentMain.innerHTML = nextMain.innerHTML;
+            document.body.className = doc.body.className;
+            if (keepSidebarOpen) {{
+              document.body.classList.add("sidebar-open");
+            }}
+            document.querySelector(".workflow-state-panel")?.remove();
+            const nextWorkflowPanel = doc.querySelector(".workflow-state-panel");
+            if (nextWorkflowPanel) {{
+              document.body.insertBefore(nextWorkflowPanel, document.getElementById("settings-backdrop"));
+            }}
             bindUi();
             scrollChatToBottom();
             playLatestAssistantTts();
