@@ -1,9 +1,13 @@
+import io
+import json
 import unittest
+from urllib.parse import urlencode
 
 from humanoid_fleet.bootstrap import build_demo_robots
 from humanoid_fleet.domain import MediaAttachment, UserInput
-from humanoid_fleet.app import FleetControlApp
+from humanoid_fleet.app import FleetControlApp, _looks_like_confirmation
 from humanoid_fleet.understanding import HybridTaskInterpreter, OllamaModelClient
+from humanoid_fleet.web import application
 
 
 class DemoFlowTest(unittest.TestCase):
@@ -35,6 +39,79 @@ class DemoFlowTest(unittest.TestCase):
         self.assertEqual(review["state"], "awaiting_confirmation")
         self.assertEqual(review["resolution"]["mode"], "sop")
         self.assertIn("确认后", review["assistant_message"])
+        self.assertEqual(review["workflow"]["tasks"][1]["skill_name"], "pickup_item")
+        self.assertEqual(review["workflow"]["tasks"][2]["skill_name"], "deliver_items")
+
+    def test_web_shows_workflow_state_graph_after_sop_match(self) -> None:
+        body = urlencode(
+            {
+                "history": "[]",
+                "action": "send",
+                "message": "去拿杯冰可乐给3号桌顾客",
+            }
+        ).encode("utf-8")
+        status_holder = {}
+
+        def start_response(status, headers):
+            status_holder["status"] = status
+
+        response = b"".join(
+            application(
+                {
+                    "REQUEST_METHOD": "POST",
+                    "PATH_INFO": "/",
+                    "QUERY_STRING": "",
+                    "CONTENT_LENGTH": str(len(body)),
+                    "wsgi.input": io.BytesIO(body),
+                },
+                start_response,
+            )
+        ).decode("utf-8")
+
+        self.assertEqual(status_holder["status"], "200 OK")
+        self.assertIn("原子技能状态图", response)
+        self.assertIn('data-workflow-id="wf-pickup-service-001"', response)
+        self.assertIn("pickup_item", response)
+        self.assertIn("deliver_items", response)
+
+    def test_web_chat_confirmation_generates_execution_plan(self) -> None:
+        history = [
+            {"role": "user", "content": "去拿杯冰可乐给3号桌顾客"},
+            {"role": "assistant", "content": "我已命中「Pick up and deliver items」。请确认。"},
+        ]
+        body = urlencode(
+            {
+                "history": json.dumps(history, ensure_ascii=False),
+                "action": "send",
+                "message": "我说我确认你开始执行吧",
+            }
+        ).encode("utf-8")
+        status_holder = {}
+
+        def start_response(status, headers):
+            status_holder["status"] = status
+
+        response = b"".join(
+            application(
+                {
+                    "REQUEST_METHOD": "POST",
+                    "PATH_INFO": "/",
+                    "QUERY_STRING": "",
+                    "CONTENT_LENGTH": str(len(body)),
+                    "wsgi.input": io.BytesIO(body),
+                },
+                start_response,
+            )
+        ).decode("utf-8")
+
+        self.assertEqual(status_holder["status"], "200 OK")
+        self.assertIn("已确认。我已经生成机器人分工和执行计划。", response)
+        self.assertIn("任务时间线与机器人分工", response)
+        self.assertNotIn("已命中 SOP，等待用户确认", response)
+
+    def test_confirmation_detection_ignores_questions(self) -> None:
+        self.assertTrue(_looks_like_confirmation("我说我确认你开始执行吧"))
+        self.assertFalse(_looks_like_confirmation("你确认什么？"))
 
     def test_conversation_does_not_treat_meta_question_as_task_detail(self) -> None:
         review = FleetControlApp().review_conversation(

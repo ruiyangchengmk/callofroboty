@@ -119,7 +119,14 @@ def _looks_like_cancel(text: str) -> bool:
 
 
 def _looks_like_confirmation(text: str) -> bool:
-    return any(keyword in text for keyword in CONFIRM_KEYWORDS)
+    normalized = text.strip()
+    if not normalized:
+        return False
+    if "?" in normalized or "？" in normalized:
+        return False
+    if any(keyword in normalized for keyword in ("确认什么", "为什么", "解释", "命中什么")):
+        return False
+    return any(keyword in normalized for keyword in CONFIRM_KEYWORDS)
 
 
 def _has_explicit_destination(text: str) -> bool:
@@ -249,6 +256,7 @@ class FleetControlApp:
             },
             "template": asdict(resolved.template) if resolved.template is not None else None,
             "understanding_prompt": self.interpreter.preview_prompt(user_input),
+            "workflow": self._build_workflow_preview(intent, resolved),
         }
 
     def plan_task(self, task_text: str, attachments: list[dict[str, str]] | None = None) -> dict[str, Any]:
@@ -287,6 +295,12 @@ class FleetControlApp:
             "workflow": asdict(scheduled_workflow),
             "execution_plan": asdict(execution_plan),
         }
+
+    def _build_workflow_preview(self, intent, resolved) -> dict[str, Any]:
+        robots = build_demo_robots()
+        workflow = self.orchestrator.build_workflow(intent, resolved)
+        scheduled_workflow = self.scheduler.assign(workflow, robots)
+        return asdict(scheduled_workflow)
 
     @staticmethod
     def _build_confirmation_message(intent, template_name: str) -> str:
